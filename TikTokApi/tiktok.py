@@ -188,6 +188,7 @@ class TikTokApi:
             headers=request_headers,
             base_url=url,
         )
+
         if ms_token is None:
             time.sleep(sleep_after)  # TODO: Find a better way to wait for msToken
             cookies = await self.get_session_cookies(session)
@@ -199,6 +200,16 @@ class TikTokApi:
                 )
         self.sessions.append(session)
         await self.__set_session_params(session)
+
+    async def verify_sessions(self):
+        await asyncio.gather(*[self.__verify_session() for _ in range(self.num_sessions)])
+
+    async def __verify_session(self):
+        resp = await self.make_request(
+            "https://verification-i18n.tiktok.com/captcha/get", 
+            headers={}, 
+            params={"type": "verify", "subtype": "slide", "challenge_code": "3058"},)
+        pass
 
     async def create_sessions(
         self,
@@ -413,7 +424,7 @@ class TikTokApi:
                     )
                 params["msToken"] = ms_token
 
-        encoded_params = f"{url}?{urlencode(params, safe='=', quote_via=quote)}"
+        encoded_params = f"{url}?{urlencode(params, doseq=True, safe='=', quote_via=quote)}"
         signed_url = await self.sign_url(encoded_params, session_index=i)
 
         retry_count = 0
@@ -427,7 +438,16 @@ class TikTokApi:
                 raise Exception("TikTokApi.run_fetch_script returned None")
 
             if result == "":
-                raise EmptyResponseException(result, "TikTok returned an empty response")
+                if retry_count == retries:
+                    self.logger.error(f"Got an empty response: {result}")
+                    raise EmptyResponseException(result, "TikTok returned an empty response")
+                self.logger.info(
+                    f"Failed a request, retrying ({retry_count}/{retries})"
+                )
+                if exponential_backoff:
+                    await asyncio.sleep(2**retry_count)
+                else:
+                    await asyncio.sleep(1)
 
             try:
                 data = json.loads(result)

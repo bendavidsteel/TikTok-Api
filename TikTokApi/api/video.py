@@ -3,7 +3,7 @@ from ..helpers import extract_video_id_from_url
 from typing import TYPE_CHECKING, ClassVar, Iterator, Optional
 from datetime import datetime
 import requests
-from ..exceptions import InvalidResponseException
+from ..exceptions import InvalidResponseException, NotFoundException
 import json
 
 if TYPE_CHECKING:
@@ -142,9 +142,14 @@ class Video:
             default_scope = data.get("__DEFAULT_SCOPE__", {})
             video_detail = default_scope.get("webapp.video-detail", {})
             if video_detail.get("statusCode", 0) != 0: # assume 0 if not present
-                raise InvalidResponseException(
-                    r.text, "TikTok returned an invalid response structure.", error_code=r.status_code
-                )
+                if video_detail.get("statusCode", 0) == 10204:
+                    raise NotFoundException(
+                        r.text, "TikTok indicated that the content does not exist.", error_code=r.status_code
+                    )
+                else:
+                    raise InvalidResponseException(
+                        r.text, "TikTok returned an invalid response structure.", error_code=r.status_code
+                    )
             video_info = video_detail.get("itemInfo", {}).get("itemStruct")
             if video_info is None:
                 raise InvalidResponseException(
@@ -172,31 +177,31 @@ class Video:
                     output.write(video_bytes)
         """
 
-        raise NotImplementedError
         i, session = self.parent._get_session(**kwargs)
-        downloadAddr = self.as_dict["video"]["downloadAddr"]
+        downloadAddr = self.as_dict["video"]["playAddr"]
 
         cookies = await self.parent.get_session_cookies(session)
         cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
 
         h = session.headers
-        h["cookie"] = cookie_str
+        # h["cookie"] = cookie_str
 
         # Fetching the video bytes using a browser fetch within the page context
-        file_bytes = await session.page.evaluate(
-            """
-        async (url, headers) => {
-            const response = await fetch(url, { headers });
-            if (response.ok) {
-                const buffer = await response.arrayBuffer();
-                return new Uint8Array(buffer);
-            } else {
-                return `Error: ${response.statusText}`;  // Return an error message if the fetch fails
-            }
-        }
-        """,
-            (downloadAddr, h),
-        )
+        # file_bytes = await session.page.evaluate(
+        #     """
+        # async (url, headers) => {
+        #     const response = await fetch(url, { headers });
+        #     if (response.ok) {
+        #         const buffer = await response.arrayBuffer();
+        #         return new Uint8Array(buffer);
+        #     } else {
+        #         return `Error: ${response.statusCode}`;  // Return an error message if the fetch fails
+        #     }
+        # }
+        # """,
+        #     (downloadAddr, h),
+        # )
+        r = requests.get(downloadAddr, headers=h, cookies=cookies)
 
         byte_values = [
             value
@@ -258,7 +263,10 @@ class Video:
                 "aweme_id": self.id,
                 "count": 20,
                 "cursor": cursor,
+                "WebIdLastTime": int(datetime.now().timestamp()),
             }
+            if "params" in kwargs:
+                params.update(kwargs["params"])
 
             resp = await self.parent.make_request(
                 url="https://www.tiktok.com/api/comment/list/",
